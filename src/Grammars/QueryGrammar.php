@@ -76,8 +76,14 @@ class QueryGrammar extends Grammar
      * Values wrapped in a Variant are written through PARSE_JSON so Snowflake
      * parses the JSON payload into a semi-structured (VARIANT/OBJECT/ARRAY)
      * value. The value still flows as a real bound parameter; only the
-     * placeholder changes. This covers inserts, updates and upserts, which all
-     * route their values through parameter()/parameterize().
+     * placeholder changes.
+     *
+     * Snowflake rejects function expressions such as PARSE_JSON() inside a
+     * VALUES clause, so inserts and upserts deliberately do not route their row
+     * values through this method — see compileInsert()/compileUpsert(), which
+     * bind raw placeholders and apply PARSE_JSON in a SELECT projection instead.
+     * This method still drives the valid contexts (where clauses and update
+     * assignments).
      *
      * @param  mixed  $value
      * @return string
@@ -89,6 +95,96 @@ class QueryGrammar extends Grammar
         }
 
         return parent::parameter($value);
+    }
+
+    /**
+     * Compile an insert statement into SQL.
+     *
+     * Snowflake forbids function expressions such as PARSE_JSON() inside a
+     * VALUES clause, so when any value is a Variant we cannot use the standard
+     * `insert into t (...) values (?, PARSE_JSON(?))` form. Instead we bind the
+     * raw values into a VALUES table constructor and apply PARSE_JSON in the
+     * SELECT projection that reads from it:
+     *
+     *   insert into t (code, name) select column1, parse_json(column2) from values (?, ?)
+     *
+     * @return string
+     */
+    public function compileInsert(Builder $query, array $values)
+    {
+        if (empty($values)) {
+            return parent::compileInsert($query, $values);
+        }
+
+        if (! is_array(reset($values))) {
+            $values = [$values];
+        }
+
+        if (! $this->valuesContainVariant($values)) {
+            return parent::compileInsert($query, $values);
+        }
+
+        $table = $this->wrapTable($query->from);
+
+        $columns = array_keys(reset($values));
+
+        $projection = collect($columns)
+            ->map(function ($column, $index) use ($values) {
+                $position = 'column'.($index + 1);
+
+                return $this->columnContainsVariant($values, $column)
+                    ? 'parse_json('.$position.')'
+                    : $position;
+            })
+            ->implode(', ');
+
+        $rows = collect($values)
+            ->map(fn ($record) => '('.$this->parameterizeWithoutVariant($record).')')
+            ->implode(', ');
+
+        return "insert into {$table} ({$this->columnize($columns)}) select {$projection} from values {$rows}";
+    }
+
+    /**
+     * Determine if any row carries a Variant value.
+     */
+    protected function valuesContainVariant(array $values): bool
+    {
+        foreach ($values as $record) {
+            foreach ($record as $value) {
+                if ($value instanceof Variant) {
+                    return true;
+                }
+            }
+        }
+
+        return false;
+    }
+
+    /**
+     * Determine if a given column carries a Variant value in any row.
+     */
+    protected function columnContainsVariant(array $values, string $column): bool
+    {
+        foreach ($values as $record) {
+            if (($record[$column] ?? null) instanceof Variant) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /**
+     * Parameterize a record using raw placeholders, leaving Variant values as a
+     * plain `?` so PARSE_JSON can be applied in the surrounding SELECT
+     * projection rather than inside the (unsupported) VALUES clause.
+     */
+    protected function parameterizeWithoutVariant(array $values): string
+    {
+        return collect($values)
+            ->map(fn ($value) => $value instanceof Variant ? '?' : $this->parameter($value))
+            ->implode(', ');
     }
 
     /**
@@ -212,13 +308,23 @@ class QueryGrammar extends Grammar
 
         // Expose the bound values as a derived table. Snowflake names the
         // columns of a VALUES clause column1..columnN, so alias them back to
-        // the real column names.
+        // the real column names. Variant columns are parsed here in the SELECT
+        // projection because Snowflake forbids PARSE_JSON() inside the VALUES
+        // clause itself.
         $source = collect($columns)
-            ->map(fn ($column, $index) => 'column'.($index + 1).' as '.$this->wrap($column))
+            ->map(function ($column, $index) use ($values) {
+                $position = 'column'.($index + 1);
+
+                $expression = $this->columnContainsVariant($values, $column)
+                    ? 'parse_json('.$position.')'
+                    : $position;
+
+                return $expression.' as '.$this->wrap($column);
+            })
             ->implode(', ');
 
         $rows = collect($values)
-            ->map(fn ($record) => '('.$this->parameterize($record).')')
+            ->map(fn ($record) => '('.$this->parameterizeWithoutVariant($record).')')
             ->implode(', ');
 
         $on = collect($uniqueBy)
