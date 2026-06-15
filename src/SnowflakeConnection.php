@@ -1,18 +1,19 @@
 <?php
 
-namespace LaravelPdoOdbc\Flavours\Snowflake;
+namespace Bernskiold\LaravelSnowflake;
 
+use Bernskiold\LaravelSnowflake\Odbc\OdbcConnection;
+use Bernskiold\LaravelSnowflake\Values\Variant;
+use DateTimeInterface;
+use Illuminate\Database\Query\Processors\Processor;
 use PDO;
 use PDOStatement;
-use DateTimeInterface;
-use LaravelPdoOdbc\ODBCConnection;
 
 use function is_bool;
+use function is_int;
 use function is_null;
-use function is_float;
-use function is_string;
 
-class Connection extends ODBCConnection
+class SnowflakeConnection extends OdbcConnection
 {
     /**
      * Temporary file path for private key
@@ -22,10 +23,9 @@ class Connection extends ODBCConnection
     /**
      * Create a new database connection instance.
      *
-     * @param PDO $pdo
-     * @param string $database
-     * @param string $tablePrefix
-     * @param array $config
+     * @param  PDO  $pdo
+     * @param  string  $database
+     * @param  string  $tablePrefix
      */
     public function __construct($pdo, $database = '', $tablePrefix = '', array $config = [])
     {
@@ -56,7 +56,7 @@ class Connection extends ODBCConnection
             $this->useDefaultSchemaGrammar();
         }
 
-        return new Builders\Schema($this);
+        return new Schema\Builder($this);
     }
 
     public function getDefaultQueryGrammar()
@@ -67,7 +67,7 @@ class Connection extends ODBCConnection
             return new $queryGrammar($this);
         }
 
-        return new Grammars\Query($this);
+        return new Grammars\QueryGrammar($this);
     }
 
     public function getDefaultSchemaGrammar()
@@ -78,40 +78,42 @@ class Connection extends ODBCConnection
             return new $schemaGrammar($this);
         }
 
-        return new Grammars\Schema($this);
+        return new Grammars\SchemaGrammar($this);
     }
 
     /**
      * Bind values to their parameters in the given statement.
      *
-     * @param PDOStatement $statement
-     * @param array        $bindings
+     * Booleans are bound as the literals TRUE/FALSE, which Snowflake coerces
+     * into its native boolean type.
      *
+     * @param  PDOStatement  $statement
+     * @param  array  $bindings
      * @return void
      */
     public function bindValues($statement, $bindings)
     {
         foreach ($bindings as $key => $value) {
-            $type = PDO::PARAM_STR;
-            if (is_bool($value)) {
-                $value = $value ? 'TRUE' : 'FALSE';
-            } else if(is_string($value) && ctype_digit($value) && strlen($value) > 1 && $value[0] === '0'){
-                // Preserve numeric strings with leading zeros (e.g. "00123") as strings
-                $type = PDO::PARAM_STR;
-            } elseif (is_numeric($value)) {
-                $type = PDO::PARAM_INT;
-            }
+            $parameter = is_string($key) ? $key : $key + 1;
 
-            $statement->bindValue(
-                is_string($key) ? $key : $key + 1,
-                $value,
-                $type
-            );
+            if (is_bool($value)) {
+                $statement->bindValue($parameter, $value ? 'TRUE' : 'FALSE', PDO::PARAM_STR);
+            } elseif (is_null($value)) {
+                $statement->bindValue($parameter, null, PDO::PARAM_NULL);
+            } elseif (is_int($value)) {
+                $statement->bindValue($parameter, $value, PDO::PARAM_INT);
+            } else {
+                $statement->bindValue($parameter, $value, PDO::PARAM_STR);
+            }
         }
     }
 
     /**
      * Prepare the query bindings for execution.
+     *
+     * Values are passed through untouched apart from dates, so that numeric
+     * strings (including those with leading zeros or decimals) are never
+     * silently coerced.
      *
      * @return array
      */
@@ -120,20 +122,10 @@ class Connection extends ODBCConnection
         $grammar = $this->getQueryGrammar();
 
         foreach ($bindings as $key => $value) {
-            // We need to transform all instances of DateTimeInterface into the actual
-            // date string. Each query grammar maintains its own date string format
-            // so we'll just ask the grammar for the format to get from the date.
-            if ($value instanceof DateTimeInterface) {
+            if ($value instanceof Variant) {
+                $bindings[$key] = $value->toJsonString();
+            } elseif ($value instanceof DateTimeInterface) {
                 $bindings[$key] = $value->format($grammar->getDateFormat());
-            } elseif (is_bool($value)) {
-                $bindings[$key] = (bool) $value;
-            } elseif (is_float($value)) {
-                $bindings[$key] = (float) $value;
-            } else if(is_string($value) && ctype_digit($value) && strlen($value) > 1 && $value[0] === '0'){
-                // Preserve numeric strings with leading zeros (e.g. "00123") as strings
-                $bindings[$key] = $value;
-            } elseif (is_numeric($value)) {
-                $bindings[$key] = (int) $value;
             }
         }
 
@@ -143,16 +135,16 @@ class Connection extends ODBCConnection
     /**
      * Get the default post processor instance.
      *
-     * @return ODBCProcessor
+     * @return Processor
      */
     protected function getDefaultPostProcessor()
     {
         $processor = $this->getConfig('options.processor');
 
         if ($processor) {
-            return new $processor();
+            return new $processor;
         }
 
-        return new Processor();
+        return new SnowflakeProcessor;
     }
 }

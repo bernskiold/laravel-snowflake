@@ -1,14 +1,22 @@
 {
-  "name": "bernskiold/laravel-pdo-odbc",
-  "description": "PDO ODBC/Snowflake integration for Laravel framework. Support ODBC and native PDO Snowflake.",
+  "name": "bernskiold/laravel-snowflake",
+  "description": "Snowflake database driver for Laravel, supporting both the native pdo_snowflake extension and ODBC connections.",
   "type": "library",
-  "homepage": "https://github.com/appsfortableau/laravel-pdo-odbc",
+  "keywords": [
+    "laravel",
+    "snowflake",
+    "database",
+    "eloquent",
+    "odbc",
+    "pdo"
+  ],
+  "homepage": "https://github.com/bernskiold/laravel-pdo-odbc",
   "license": "MIT",
   "authors": [
     {
-      "name": "Yoram de Langen",
-      "email": "yoram@appsfortableau.infotopics.com",
-      "homepage": "https://github.com/appsfortableau/laravel-pdo-odbc",
+      "name": "Bernskiold",
+      "email": "erik@bernskiold.com",
+      "homepage": "https://bernskiold.com",
       "role": "Developer"
     }
   ],
@@ -17,15 +25,40 @@
     "illuminate/database": "^12.0|^13.0",
     "illuminate/support": "^12.0|^13.0"
   },
+  "require-dev": {
+    "laravel/pint": "^1.29",
+    "orchestra/testbench": "^10.0|^11.0",
+    "pestphp/pest": "^3.8|^4.0",
+    "phpstan/phpstan": "^2.2"
+  },
   "autoload": {
     "psr-4": {
-      "LaravelPdoOdbc\\": "src/"
+      "Bernskiold\\LaravelSnowflake\\": "src/"
     }
   },
+  "autoload-dev": {
+    "psr-4": {
+      "Bernskiold\\LaravelSnowflake\\Tests\\": "tests/"
+    }
+  },
+  "scripts": {
+    "test": "vendor/bin/pest",
+    "lint": "vendor/bin/pint --test",
+    "lint:fix": "vendor/bin/pint",
+    "analyse": "vendor/bin/phpstan analyse"
+  },
+  "config": {
+    "sort-packages": true,
+    "allow-plugins": {
+      "pestphp/pest-plugin": true
+    }
+  },
+  "minimum-stability": "stable",
+  "prefer-stable": true,
   "extra": {
     "laravel": {
       "providers": [
-        "LaravelPdoOdbc\\ODBCServiceProvider"
+        "Bernskiold\\LaravelSnowflake\\SnowflakeServiceProvider"
       ]
     }
   }

@@ -1,6 +1,6 @@
 <?php
 
-namespace LaravelPdoOdbc\Contracts;
+namespace Bernskiold\LaravelSnowflake\Contracts;
 
 use Closure;
 

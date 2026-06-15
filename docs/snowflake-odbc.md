@@ -20,11 +20,10 @@ These quirks do not apply when using the snowflake PHP extension.
 
    - [ODBC parameters](https://docs.snowflake.com/en/user-guide/odbc-parameters.html#configuration-parameters).
    - [Changelog June 2020](https://community.snowflake.com/s/article/client-release-history).
-   - [More about DDL]
 
 2. Snowflake does not support streaming bind values. This limitation affects
-   scenarios where you
-
-use `$stmt->bindValue(...)` or `$stmt->bindParam()` after preparing the statement
-using `->prepare('..')`. To address this issue, a custom `CustomStatement`
-class has been added.
+   scenarios where you use `$stmt->bindValue(...)` or `$stmt->bindParam()`
+   after preparing the statement using `->prepare('..')`. To address this
+   issue, the package ships a custom
+   `Bernskiold\LaravelSnowflake\PDO\Statement` class that collects bindings
+   and interpolates them into the query before execution.

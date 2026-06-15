@@ -1,20 +1,20 @@
 <?php
 
-namespace LaravelPdoOdbc\Flavours\Snowflake;
+namespace Bernskiold\LaravelSnowflake;
 
+use Bernskiold\LaravelSnowflake\Contracts\OdbcDriver;
+use Bernskiold\LaravelSnowflake\Odbc\OdbcConnector;
+use Bernskiold\LaravelSnowflake\PDO\Statement;
 use Closure;
 use Exception;
-use LaravelPdoOdbc\Contracts\OdbcDriver;
-use LaravelPdoOdbc\ODBCConnector;
 use Illuminate\Support\Arr;
-
 use PDO;
 
 /**
  * Snowflake Connector
  * Inspiration: https://github.com/jenssegers/laravel-mongodb.
  */
-class Connector extends ODBCConnector implements OdbcDriver
+class SnowflakeConnector extends OdbcConnector implements OdbcDriver
 {
     /**
      * Establish a database connection.
@@ -37,7 +37,7 @@ class Connector extends ODBCConnector implements OdbcDriver
             $this->dsnPrefix = 'snowflake';
             $this->dsnIncludeDriver = false;
 
-            if (!extension_loaded('pdo_snowflake')) {
+            if (! extension_loaded('pdo_snowflake')) {
                 throw new Exception('Native Snowflake driver pdo_snowflake was not enabled');
             }
         }
@@ -52,10 +52,15 @@ class Connector extends ODBCConnector implements OdbcDriver
             }
         }
 
-        // custom Statement class to resolve Streaming value and parameters.
-        $connection->setAttribute(PDO::ATTR_STATEMENT_CLASS, [\LaravelPdoOdbc\Flavours\Snowflake\PDO\Statement::class, [$connection]]);
+        // The Snowflake ODBC driver cannot stream bind values, so a custom
+        // statement class interpolates them instead. The native pdo_snowflake
+        // driver binds parameters properly and keeps the default statement.
+        if (! $usingSnowflakeDriver) {
+            $connection->setAttribute(PDO::ATTR_STATEMENT_CLASS, [Statement::class, [$connection]]);
+        }
 
         $connection->setAttribute(PDO::ATTR_ERRMODE, PDO::ERRMODE_EXCEPTION);
+
         return $connection;
     }
 
@@ -130,11 +135,18 @@ class Connector extends ODBCConnector implements OdbcDriver
     public static function registerDriver(): Closure
     {
         return function ($connection, $database, $prefix, $config) {
-            $connection = (new self())->connect($config);
+            $connection = (new self)->connect($config);
 
             // create connection
-            $db = new Connection($connection, $database, $prefix, $config);
-            if (!env('SNOWFLAKE_DISABLE_FORCE_QUOTED_IDENTIFIER')) {
+            $db = new SnowflakeConnection($connection, $database, $prefix, $config);
+
+            // Keep quoted identifiers case-sensitive so the grammar's quoting
+            // semantics hold, unless explicitly disabled per connection or
+            // through the package configuration.
+            $forceQuoted = Arr::get($config, 'options.force_quoted_identifiers')
+                ?? config('snowflake.force_quoted_identifiers', true);
+
+            if ($forceQuoted) {
                 $connection->exec('ALTER SESSION SET QUOTED_IDENTIFIERS_IGNORE_CASE = false');
             }
 

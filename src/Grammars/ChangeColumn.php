@@ -1,12 +1,9 @@
 <?php
 
-namespace LaravelPdoOdbc\Flavours\Snowflake\Grammars;
+namespace Bernskiold\LaravelSnowflake\Grammars;
 
-use RuntimeException;
-use Illuminate\Support\Fluent;
-use Illuminate\Database\Connection;
 use Illuminate\Database\Schema\Blueprint;
-use Illuminate\Database\Schema\Grammars\Grammar;
+use Illuminate\Support\Fluent;
 
 /**
  * Changing actions:
@@ -24,17 +21,15 @@ class ChangeColumn
     /**
      * Compile a change column command into a series of SQL statements.
      *
-     * @throws RuntimeException
-     *
-     * @return array
+     * @return array|string
      */
-    public static function compile(Grammar $grammar, Blueprint $blueprint, Fluent $command)
+    public static function compile(SchemaGrammar $grammar, Blueprint $blueprint, Fluent $command)
     {
         $type = $command->offsetGet('name'); // can be: change, dropColumn, renameColumn
 
-        if ('dropColumn' === $type) {
+        if ($type === 'dropColumn') {
             return $grammar->compileDropColumn($blueprint, $command);
-        } elseif ('renameColumn' === $type) {
+        } elseif ($type === 'renameColumn') {
             return $grammar->compileRenameColumn($blueprint, $command);
         }
 

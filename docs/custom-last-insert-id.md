@@ -1,12 +1,13 @@
 # Custom `getLastInsertId()` Function
 
 If you need to provide a custom `getLastInsertId()` function, you can extend
-the `ODBCProcessor` class and override the function as follows:
+the `SnowflakeProcessor` class and override the function as follows:
 
 ```php
-class CustomProcessor extends O
+use Bernskiold\LaravelSnowflake\SnowflakeProcessor;
+use Illuminate\Database\Query\Builder;
 
-DBCProcessor
+class CustomProcessor extends SnowflakeProcessor
 {
     /**
      * @param Builder $query
@@ -19,3 +20,6 @@ DBCProcessor
     }
 }
 ```
+
+Then register it on your connection via the `options.processor` configuration
+key, as described in [Custom processor and grammars](custom-grammars.md).

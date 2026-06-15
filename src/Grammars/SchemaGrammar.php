@@ -1,43 +1,44 @@
 <?php
 
-namespace LaravelPdoOdbc\Flavours\Snowflake\Grammars;
+namespace Bernskiold\LaravelSnowflake\Grammars;
 
-use Illuminate\Database\Connection;
+use const FILTER_VALIDATE_BOOLEAN;
+
+use Bernskiold\LaravelSnowflake\Concerns\GrammarHelper;
 use Illuminate\Database\Query\Expression;
 use Illuminate\Database\Schema\Blueprint;
 use Illuminate\Database\Schema\Grammars\Grammar as BaseGrammar;
 use Illuminate\Support\Fluent;
-use LaravelPdoOdbc\Flavours\Snowflake\Concerns\GrammarHelper;
 use RuntimeException;
 
+use function count;
 use function in_array;
+use function is_bool;
 use function is_float;
 use function is_int;
 use function is_null;
 
-use const FILTER_VALIDATE_BOOLEAN;
-
 /**
- * More documentation on Snowflake columns:
- *     https://docs.snowflake.com/en/sql-reference/intro-summary-data-types.html
- * and even semi structures (usefull for JSON stuff):
- *     https://docs.snowflake.com/en/sql-reference/data-types-semistructured.html.
+ * Schema grammar for Snowflake.
  *
- * Rules for altering can be found here:
- *     https://docs.snowflake.com/en/sql-reference/sql/alter-table-column.html
+ * Data types: https://docs.snowflake.com/en/sql-reference/intro-summary-data-types
+ * Semi-structured types: https://docs.snowflake.com/en/sql-reference/data-types-semistructured
+ * Column alteration rules: https://docs.snowflake.com/en/sql-reference/sql/alter-table-column
  */
-class Schema extends BaseGrammar
+class SchemaGrammar extends BaseGrammar
 {
     use GrammarHelper;
 
     /**
-     * The possible column modifiers.
+     * The possible column modifiers, in the order Snowflake documents the
+     * column clauses: collate, comment, default/autoincrement, not null,
+     * inline constraint.
      *
      * @var string[]
      */
     protected $modifiers = [
-        'Charset', 'Collate', 'VirtualAs', 'StoredAs', 'Nullable',
-        'Srid', 'Default', 'Increment', 'Comment', 'After', 'First',
+        'VirtualAs', 'StoredAs', 'Collate', 'Comment',
+        'Default', 'Increment', 'Nullable', 'PrimaryKey',
     ];
 
     /**
@@ -45,53 +46,139 @@ class Schema extends BaseGrammar
      *
      * @var string[]
      */
-    protected $serials = ['bigInteger', 'integer', 'smallInteger'];
+    protected $serials = ['bigInteger', 'integer', 'mediumInteger', 'smallInteger', 'tinyInteger'];
 
     /**
-     * Compile the query to determine the list of tables.
+     * Compile the query to determine if the given table exists.
      *
+     * @param  string  $database
+     * @param  string  $table
+     * @param  string|null  $schema
      * @return string
      */
-    public function compileTableExists($schema, $table)
+    public function compileTableExists($database, $table, $schema = null)
+    {
+        $sql = sprintf(
+            "select * from %s.information_schema.tables where table_name = %s and table_type = 'BASE TABLE'",
+            $this->wrap($database),
+            $this->quoteStringLiteral($table)
+        );
+
+        if ($schema) {
+            $sql .= ' and table_schema = '.$this->quoteStringLiteral($schema);
+        }
+
+        return $sql;
+    }
+
+    /**
+     * Compile the query to determine the tables.
+     *
+     * @param  string|string[]|null  $schema
+     * @return string
+     */
+    public function compileTables($schema)
     {
         return sprintf(
-            "select * from information_schema.tables where table_catalog = %s and table_name = %s and table_type = 'BASE TABLE'",
-            $this->quoteString($schema),
-            $this->quoteString($table)
+            'select table_name as "name", table_schema as "schema", bytes as "size", comment as "comment" '
+                ."from %s.information_schema.tables where table_type = 'BASE TABLE'%s order by table_name",
+            $this->wrap($this->connection->getDatabaseName()),
+            $this->compileSchemaFilter($schema)
         );
     }
 
     /**
-     * Compile the query to determine the list of tables.
+     * Compile the query to determine the views.
      *
+     * @param  string|string[]|null  $schema
      * @return string
      */
-    public function compileTableDetails(string $table)
+    public function compileViews($schema)
     {
         return sprintf(
-            "select * from information_schema.tables where table_name = '%s' order by ordinal_position'",
-            $this->wrapTable($table)
+            'select table_name as "name", table_schema as "schema", view_definition as "definition" '
+                .'from %s.information_schema.views%s order by table_name',
+            $this->wrap($this->connection->getDatabaseName()),
+            ' where 1 = 1'.$this->compileSchemaFilter($schema)
         );
     }
 
     /**
-     * Compile the query to determine the list of columns.
+     * Compile the query to determine the columns of a table.
      *
+     * @param  string|null  $schema
+     * @param  string  $table
      * @return string
      */
-    public function compileColumnListing()
+    public function compileColumns($schema, $table)
     {
-        return 'select column_name as "column_name", data_type as "column_type", lower(is_nullable) as "is_nullable" from {DB_NAME}.information_schema.columns where table_catalog = ? and table_name = ?';
+        $sql = sprintf(
+            'select column_name as "name", data_type as "type_name", data_type as "type", '
+                .'character_maximum_length as "char_length", numeric_precision as "numeric_precision", numeric_scale as "numeric_scale", '
+                .'is_nullable as "nullable", column_default as "default", is_identity as "auto_increment", '
+                .'collation_name as "collation", comment as "comment" '
+                .'from %s.information_schema.columns where table_name = %s',
+            $this->wrap($this->connection->getDatabaseName()),
+            $this->quoteStringLiteral($this->caseFoldName($table))
+        );
+
+        if ($schema = $schema ?: $this->connection->getConfig('schema')) {
+            $sql .= ' and table_schema = '.$this->quoteStringLiteral($this->caseFoldName($schema));
+        }
+
+        return $sql.' order by ordinal_position';
     }
 
     /**
-     * Compile the query to determine the list of columns.
+     * Compile the query to determine the indexes of a table.
      *
+     * Snowflake does not have indexes, so this yields an empty result set.
+     *
+     * @param  string|null  $schema
+     * @param  string  $table
      * @return string
      */
-    public function compileGetColumnType()
+    public function compileIndexes($schema, $table)
     {
-        return 'select column_name as "column_name", data_type as "column_type", numeric_precision as "numeric_precision", numeric_scale as "numeric_scale" from {DB_NAME}.information_schema.columns where table_name = ? and column_name = ?';
+        return 'select \'\' as "name", \'\' as "columns", \'\' as "type", false as "unique", false as "primary" limit 0';
+    }
+
+    /**
+     * Compile the query to determine the foreign keys of a table.
+     *
+     * Snowflake stores foreign keys as unenforced, informational constraints
+     * whose columns are not exposed through information_schema, so this
+     * yields an empty result set.
+     *
+     * @param  string|null  $schema
+     * @param  string  $table
+     * @return string
+     */
+    public function compileForeignKeys($schema, $table)
+    {
+        return 'select \'\' as "name", \'\' as "columns", \'\' as "foreign_schema", \'\' as "foreign_table", '
+            .'\'\' as "foreign_columns", null as "on_update", null as "on_delete" limit 0';
+    }
+
+    /**
+     * Compile a schema filter clause for information_schema queries.
+     *
+     * @param  string|string[]|null  $schema
+     */
+    protected function compileSchemaFilter($schema): string
+    {
+        $schemas = array_filter(array_map(strval(...), (array) ($schema ?: $this->connection->getConfig('schema'))));
+
+        if (count($schemas) === 0) {
+            return " and table_schema != 'INFORMATION_SCHEMA'";
+        }
+
+        $list = implode(', ', array_map(
+            fn ($name) => $this->quoteStringLiteral($this->caseFoldName($name)),
+            $schemas
+        ));
+
+        return ' and table_schema in ('.$list.')';
     }
 
     /**
@@ -101,37 +188,12 @@ class Schema extends BaseGrammar
      */
     public function compileCreate(Blueprint $blueprint, Fluent $command)
     {
-        $sql = $this->compileCreateTable(
-            $blueprint,
-            $command
-        );
-
-        // Once we have the primary SQL, we can add the encoding option to the SQL for
-        // the table.  Then, we can check if a storage engine has been supplied for
-        // the table. If so, we will add the engine declaration to the SQL query.
-        $sql = $this->compileCreateEncoding(
-            $sql,
-            $blueprint
-        );
-
-        // Finally, we will append the engine configuration onto this SQL statement as
-        // the final thing we do before returning this finished SQL. Once this gets
-        // added the query will be ready to execute against the real connections.
-        return $this->compileCreateEngine(
-            $sql,
-            $blueprint
-        );
-    }
-
-    /**
-     * Compile an add column command.
-     *
-     * @return string
-     */
-    public function compileAdd(Blueprint $blueprint, Fluent $command)
-    {
-        $prefix = 'alter table '.$this->wrapTable($blueprint).' add column';
-        return $this->prefixArray($prefix, $this->getColumns($blueprint));
+        return trim(sprintf(
+            '%s table %s (%s)',
+            $blueprint->temporary ? 'create temporary' : 'create',
+            $this->wrapTable($blueprint),
+            implode(', ', $this->getColumns($blueprint))
+        ));
     }
 
     /**
@@ -139,27 +201,61 @@ class Schema extends BaseGrammar
      *
      * @return array
      */
+    public function compileAdd(Blueprint $blueprint, Fluent $command)
+    {
+        $prefix = 'alter table '.$this->wrapTable($blueprint).' add column';
+
+        // Laravel dispatches one "add" command per column. Only compile all
+        // added columns when the command does not carry a single column.
+        $columns = $command->column
+            ? $this->handleNullables([$this->getColumn($blueprint, $command->column)], false)
+            : $this->getColumns($blueprint);
+
+        return $this->prefixArray($prefix, $columns);
+    }
+
+    /**
+     * Compile a change column command.
+     *
+     * @return array
+     */
     public function compileChangeColumn(Blueprint $blueprint, Fluent $command)
     {
         $prefix = sprintf('alter table %s modify column', $this->wrapTable($blueprint));
-        $columns = $this->prefixArray($prefix, $this->getChangedColumns($blueprint));
+
+        // Laravel dispatches one "change" command per column. Only compile all
+        // changed columns when the command does not carry a single column.
+        $changed = $command->column ? [$command->column] : $blueprint->getChangedColumns();
+
+        $columns = $this->handleNullables(
+            array_map(fn ($column) => $this->getColumn($blueprint, $column), $changed),
+            true
+        );
+
+        $columns = $this->prefixArray($prefix, $columns);
 
         return array_values(array_merge(
             $columns,
-            $this->compileAutoIncrementStartingValues($blueprint, $command)
+            (array) $this->compileAutoIncrementStartingValues($blueprint, $command)
         ));
     }
 
     /**
      * Compile the auto incrementing column starting values.
      *
-     * @return string
+     * @return string|null
      */
     public function compileAutoIncrementStartingValues(Blueprint $blueprint, Fluent $command)
     {
-        if ($command->column->autoIncrement && $value = $command->column->get('startingValue', $command->column->get('from'))) {
+        if (! $command->column || ! $command->column->autoIncrement) {
+            return null;
+        }
+
+        if ($value = $command->column->get('startingValue', $command->column->get('from'))) {
             return 'alter table '.$this->wrapTable($blueprint).' autoincrement start '.$value;
         }
+
+        return null;
     }
 
     /**
@@ -169,8 +265,6 @@ class Schema extends BaseGrammar
      */
     public function compilePrimary(Blueprint $blueprint, Fluent $command)
     {
-        $command->name(null);
-
         return $this->compileKey($blueprint, $command, 'primary key');
     }
 
@@ -187,21 +281,34 @@ class Schema extends BaseGrammar
     /**
      * Compile a plain index key command.
      *
-     * @return string
+     * Snowflake does not support indexes; the command is silently skipped so
+     * migrations written for other databases keep working.
+     *
+     * @return null
      */
     public function compileIndex(Blueprint $blueprint, Fluent $command)
     {
-        return $this->compileKey($blueprint, $command, 'index');
+        return null;
     }
 
     /**
      * Compile a spatial index key command.
      *
-     * @return string
+     * @return null
      */
     public function compileSpatialIndex(Blueprint $blueprint, Fluent $command)
     {
-        return $this->compileKey($blueprint, $command, 'spatial index');
+        return null;
+    }
+
+    /**
+     * Compile a fulltext index key command.
+     *
+     * @return null
+     */
+    public function compileFulltext(Blueprint $blueprint, Fluent $command)
+    {
+        return null;
     }
 
     /**
@@ -225,38 +332,34 @@ class Schema extends BaseGrammar
     }
 
     /**
-     * Compile a drop table (if exists) command.
+     * Compile a drop database (if exists) command.
      *
      * @return string
      */
     public function compileDropDatabaseIfExists($name)
     {
-        return 'drop database if exists '.$this->wrapTable($name);
+        return 'drop database if exists '.$this->wrap($name);
     }
 
     /**
-     * Compile a drop table (if exists) command.
+     * Compile a drop database command.
      *
      * @return string
      */
     public function compileDropDatabase($name)
     {
-        return 'drop database '.$this->wrapTable($name);
+        return 'drop database '.$this->wrap($name);
     }
 
     /**
      * Compile a create database command.
      *
-     * @param string                          $name
-     *
+     * @param  string  $name
      * @return string
      */
     public function compileCreateDatabase($name)
     {
-        return sprintf(
-            'create database %s',
-            $this->wrapTable($name)
-        );
+        return 'create database '.$this->wrap($name);
     }
 
     /**
@@ -288,31 +391,43 @@ class Schema extends BaseGrammar
      */
     public function compileDropUnique(Blueprint $blueprint, Fluent $command)
     {
-        $index = $this->wrap($command->index);
-
-        return "alter table {$this->wrapTable($blueprint)} drop index {$index}";
+        return sprintf(
+            'alter table %s drop constraint %s',
+            $this->wrapTable($blueprint),
+            $this->wrap($command->index)
+        );
     }
 
     /**
      * Compile a drop index command.
      *
-     * @return string
+     * Snowflake does not support indexes; the command is silently skipped.
+     *
+     * @return null
      */
     public function compileDropIndex(Blueprint $blueprint, Fluent $command)
     {
-        $index = $this->wrap($command->index);
-
-        return "alter table {$this->wrapTable($blueprint)} drop index {$index}";
+        return null;
     }
 
     /**
      * Compile a drop spatial index command.
      *
-     * @return string
+     * @return null
      */
     public function compileDropSpatialIndex(Blueprint $blueprint, Fluent $command)
     {
-        return $this->compileDropIndex($blueprint, $command);
+        return null;
+    }
+
+    /**
+     * Compile a drop fulltext index command.
+     *
+     * @return null
+     */
+    public function compileDropFullText(Blueprint $blueprint, Fluent $command)
+    {
+        return null;
     }
 
     /**
@@ -322,9 +437,11 @@ class Schema extends BaseGrammar
      */
     public function compileDropForeign(Blueprint $blueprint, Fluent $command)
     {
-        $index = $this->wrap($command->index);
-
-        return "alter table {$this->wrapTable($blueprint)} drop foreign key {$index}";
+        return sprintf(
+            'alter table %s drop constraint %s',
+            $this->wrapTable($blueprint),
+            $this->wrap($command->index)
+        );
     }
 
     /**
@@ -334,48 +451,23 @@ class Schema extends BaseGrammar
      */
     public function compileRename(Blueprint $blueprint, Fluent $command)
     {
-        $from = $this->wrapTable($blueprint);
-
-        return "alter table {$from} rename to ".$this->wrapTable($command->to);
+        return sprintf(
+            'alter table %s rename to %s',
+            $this->wrapTable($blueprint),
+            $this->wrapTable($command->to)
+        );
     }
 
     /**
      * Compile a rename index command.
      *
-     * @return string
+     * Snowflake does not support indexes; the command is silently skipped.
+     *
+     * @return null
      */
     public function compileRenameIndex(Blueprint $blueprint, Fluent $command)
     {
-        return sprintf(
-            'alter table %s rename index %s to %s',
-            $this->wrapTable($blueprint),
-            $this->wrap($command->from),
-            $this->wrap($command->to)
-        );
-    }
-
-    /**
-     * Compile the SQL needed to drop all tables.
-     *
-     * @param array $tables
-     *
-     * @return string
-     */
-    public function compileDropAllTables($tables)
-    {
-        return 'drop table '.implode(',', $this->wrapArray($tables));
-    }
-
-    /**
-     * Compile the SQL needed to drop all views.
-     *
-     * @param array $views
-     *
-     * @return string
-     */
-    public function compileDropAllViews($views)
-    {
-        return 'drop view '.implode(',', $this->wrapArray($views));
+        return null;
     }
 
     /**
@@ -401,11 +493,14 @@ class Schema extends BaseGrammar
     /**
      * Compile the command to enable foreign key constraints.
      *
+     * Snowflake foreign keys are informational and never enforced, so this is
+     * a harmless no-op statement.
+     *
      * @return string
      */
     public function compileEnableForeignKeyConstraints()
     {
-        return 'SET FOREIGN_KEY_CHECKS=1;';
+        return 'select 1';
     }
 
     /**
@@ -415,95 +510,16 @@ class Schema extends BaseGrammar
      */
     public function compileDisableForeignKeyConstraints()
     {
-        return 'SET FOREIGN_KEY_CHECKS=0;';
-    }
-
-    /**
-     * Create the column definition for a spatial Geometry type.
-     *
-     * @return string
-     */
-    public function typeGeometry(Fluent $column)
-    {
-        return 'geometry';
-    }
-
-    /**
-     * Create the column definition for a spatial Point type.
-     *
-     * @return string
-     */
-    public function typePoint(Fluent $column)
-    {
-        return 'point';
-    }
-
-    /**
-     * Create the column definition for a spatial LineString type.
-     *
-     * @return string
-     */
-    public function typeLineString(Fluent $column)
-    {
-        return 'linestring';
-    }
-
-    /**
-     * Create the column definition for a spatial Polygon type.
-     *
-     * @return string
-     */
-    public function typePolygon(Fluent $column)
-    {
-        return 'polygon';
-    }
-
-    /**
-     * Create the column definition for a spatial GeometryCollection type.
-     *
-     * @return string
-     */
-    public function typeGeometryCollection(Fluent $column)
-    {
-        return 'geometrycollection';
-    }
-
-    /**
-     * Create the column definition for a spatial MultiPoint type.
-     *
-     * @return string
-     */
-    public function typeMultiPoint(Fluent $column)
-    {
-        return 'multipoint';
-    }
-
-    /**
-     * Create the column definition for a spatial MultiLineString type.
-     *
-     * @return string
-     */
-    public function typeMultiLineString(Fluent $column)
-    {
-        return 'multilinestring';
-    }
-
-    /**
-     * Create the column definition for a spatial MultiPolygon type.
-     *
-     * @return string
-     */
-    public function typeMultiPolygon(Fluent $column)
-    {
-        return 'multipolygon';
+        return 'select 1';
     }
 
     /**
      * Compile a change column command into a series of SQL statements.
      *
-     * @throws RuntimeException
      *
      * @return array
+     *
+     * @throws RuntimeException
      */
     public function compileChange(Blueprint $blueprint, Fluent $command)
     {
@@ -511,78 +527,18 @@ class Schema extends BaseGrammar
     }
 
     /**
-     * Create the main create table clause.
-     *
-     * @param \Illuminate\Database\Schema\Blueprint $blueprint
-     * @param \Illuminate\Support\Fluent            $command
-     *
-     * @return array
-     */
-    protected function compileCreateTable($blueprint, $command)
-    {
-        return trim(sprintf(
-            '%s table %s (%s)',
-            $blueprint->temporary ? 'create temporary' : 'create',
-            $this->wrapTable($blueprint),
-            implode(', ', $this->getColumns($blueprint))
-        ));
-    }
-
-    /**
-     * Append the character set specifications to a command.
-     *
-     * @param string $sql
-     *
-     * @return string
-     */
-    protected function compileCreateEncoding($sql, Blueprint $blueprint)
-    {
-        // First we will set the character set if one has been set on either the create
-        // blueprint itself. We will add these to the create table query.
-        if (isset($blueprint->charset)) {
-            $sql .= ' default character set '.$blueprint->charset;
-        }
-
-        // Next we will add the collation to the create table statement if one has been
-        // added to this create table blueprint. We'll add it to this SQL query.
-        if (isset($blueprint->collation)) {
-            $sql .= " collate '{$blueprint->collation}'";
-        }
-
-        return $sql;
-    }
-
-    /**
-     * Append the engine specifications to a command.
-     *
-     * @param string $sql
-     *
-     * @return string
-     */
-    protected function compileCreateEngine($sql, Blueprint $blueprint)
-    {
-        if (isset($blueprint->engine)) {
-            return $sql.' engine = '.$blueprint->engine;
-        }
-
-        return $sql;
-    }
-
-    /**
      * Compile an index creation command.
      *
-     * @param string $type
-     *
+     * @param  string  $type
      * @return string
      */
     protected function compileKey(Blueprint $blueprint, Fluent $command, $type)
     {
         return sprintf(
-            'alter table %s add constraint %s %s %s(%s)',
+            'alter table %s add constraint %s %s (%s)',
             $this->wrapTable($blueprint),
             $this->wrap($command->index),
             $type,
-            $command->algorithm ? ' using '.$command->algorithm : '',
             $this->columnize($command->columns)
         );
     }
@@ -594,7 +550,7 @@ class Schema extends BaseGrammar
      */
     protected function typeChar(Fluent $column)
     {
-        return "char({$column->length})";
+        return $column->length ? "char({$column->length})" : 'char';
     }
 
     /**
@@ -604,7 +560,17 @@ class Schema extends BaseGrammar
      */
     protected function typeString(Fluent $column)
     {
-        return "varchar({$column->length})";
+        return $column->length ? "varchar({$column->length})" : 'varchar';
+    }
+
+    /**
+     * Create the column definition for a tiny text type.
+     *
+     * @return string
+     */
+    protected function typeTinyText(Fluent $column)
+    {
+        return 'text';
     }
 
     /**
@@ -624,7 +590,7 @@ class Schema extends BaseGrammar
      */
     protected function typeMediumText(Fluent $column)
     {
-        return 'mediumtext';
+        return 'text';
     }
 
     /**
@@ -634,7 +600,7 @@ class Schema extends BaseGrammar
      */
     protected function typeLongText(Fluent $column)
     {
-        return 'longtext';
+        return 'text';
     }
 
     /**
@@ -664,7 +630,7 @@ class Schema extends BaseGrammar
      */
     protected function typeMediumInteger(Fluent $column)
     {
-        return 'smallint';
+        return 'int';
     }
 
     /**
@@ -690,14 +656,12 @@ class Schema extends BaseGrammar
     /**
      * Create the column definition for a float type.
      *
+     * Snowflake floats do not take precision arguments.
+     *
      * @return string
      */
     protected function typeFloat(Fluent $column)
     {
-        if ($column->total && $column->places) {
-            return "float({$column->total}, {$column->places})";
-        }
-
         return 'float';
     }
 
@@ -708,10 +672,6 @@ class Schema extends BaseGrammar
      */
     protected function typeDouble(Fluent $column)
     {
-        if ($column->total && $column->places) {
-            return "double({$column->total}, {$column->places})";
-        }
-
         return 'double';
     }
 
@@ -738,11 +698,14 @@ class Schema extends BaseGrammar
     /**
      * Create the column definition for an enumeration type.
      *
+     * Snowflake has no enum type and does not enforce check constraints, so
+     * enums are stored as plain varchars.
+     *
      * @return string
      */
     protected function typeEnum(Fluent $column)
     {
-        return sprintf('enum(%s)', $this->quoteString($column->allowed));
+        return 'varchar';
     }
 
     /**
@@ -752,7 +715,7 @@ class Schema extends BaseGrammar
      */
     protected function typeSet(Fluent $column)
     {
-        return sprintf('set(%s)', $this->quoteString($column->allowed));
+        return 'varchar';
     }
 
     /**
@@ -762,7 +725,7 @@ class Schema extends BaseGrammar
      */
     protected function typeJson(Fluent $column)
     {
-        return 'object';
+        return 'variant';
     }
 
     /**
@@ -772,7 +735,7 @@ class Schema extends BaseGrammar
      */
     protected function typeJsonb(Fluent $column)
     {
-        return 'object';
+        return 'variant';
     }
 
     /**
@@ -792,7 +755,7 @@ class Schema extends BaseGrammar
      */
     protected function typeDateTime(Fluent $column)
     {
-        $columnType = $column->precision ? "datetime($column->precision)" : 'datetime';
+        $columnType = $column->precision ? "timestamp_ntz($column->precision)" : 'timestamp_ntz';
 
         return $column->useCurrent ? "$columnType default CURRENT_TIMESTAMP" : $columnType;
     }
@@ -804,7 +767,9 @@ class Schema extends BaseGrammar
      */
     protected function typeDateTimeTz(Fluent $column)
     {
-        return $this->typeDateTime($column);
+        $columnType = $column->precision ? "timestamp_tz($column->precision)" : 'timestamp_tz';
+
+        return $column->useCurrent ? "$columnType default CURRENT_TIMESTAMP" : $columnType;
     }
 
     /**
@@ -820,6 +785,8 @@ class Schema extends BaseGrammar
     /**
      * Create the column definition for a time (with time zone) type.
      *
+     * Snowflake's TIME type has no time zone variant.
+     *
      * @return string
      */
     protected function typeTimeTz(Fluent $column)
@@ -830,17 +797,18 @@ class Schema extends BaseGrammar
     /**
      * Create the column definition for a timestamp type.
      *
+     * The MySQL-specific "on update CURRENT_TIMESTAMP" modifier is not
+     * supported by Snowflake and is ignored.
+     *
      * @return string
      */
     protected function typeTimestamp(Fluent $column)
     {
-        $columnType = $column->precision ? "timestamp($column->precision)" : 'timestamp';
+        $columnType = $column->precision ? "timestamp_ntz($column->precision)" : 'timestamp_ntz';
 
         $current = $column->precision ? "CURRENT_TIMESTAMP($column->precision)" : 'CURRENT_TIMESTAMP';
 
-        $columnType = $column->useCurrent ? "$columnType default $current" : $columnType;
-
-        return $column->useCurrentOnUpdate ? "$columnType on update $current" : $columnType;
+        return $column->useCurrent ? "$columnType default $current" : $columnType;
     }
 
     /**
@@ -850,7 +818,11 @@ class Schema extends BaseGrammar
      */
     protected function typeTimestampTz(Fluent $column)
     {
-        return $this->typeTimestamp($column);
+        $columnType = $column->precision ? "timestamp_tz($column->precision)" : 'timestamp_tz';
+
+        $current = $column->precision ? "CURRENT_TIMESTAMP($column->precision)" : 'CURRENT_TIMESTAMP';
+
+        return $column->useCurrent ? "$columnType default $current" : $columnType;
     }
 
     /**
@@ -860,7 +832,7 @@ class Schema extends BaseGrammar
      */
     protected function typeYear(Fluent $column)
     {
-        return 'year';
+        return 'smallint';
     }
 
     /**
@@ -870,7 +842,7 @@ class Schema extends BaseGrammar
      */
     protected function typeBinary(Fluent $column)
     {
-        return 'blob';
+        return $column->length ? "binary({$column->length})" : 'binary';
     }
 
     /**
@@ -904,11 +876,32 @@ class Schema extends BaseGrammar
     }
 
     /**
+     * Create the column definition for a spatial Geometry type.
+     *
+     * @return string
+     */
+    protected function typeGeometry(Fluent $column)
+    {
+        return 'geometry';
+    }
+
+    /**
+     * Create the column definition for a spatial Geography type.
+     *
+     * @return string
+     */
+    protected function typeGeography(Fluent $column)
+    {
+        return 'geography';
+    }
+
+    /**
      * Create the column definition for a generated, computed column type.
      *
-     * @throws RuntimeException
      *
      * @return void
+     *
+     * @throws RuntimeException
      */
     protected function typeComputed(Fluent $column)
     {
@@ -925,6 +918,8 @@ class Schema extends BaseGrammar
         if (! is_null($column->virtualAs)) {
             return " as ({$column->virtualAs})";
         }
+
+        return null;
     }
 
     /**
@@ -935,33 +930,10 @@ class Schema extends BaseGrammar
     protected function modifyStoredAs(Blueprint $blueprint, Fluent $column)
     {
         if (! is_null($column->storedAs)) {
-            return " as ({$column->storedAs}) stored";
+            return " as ({$column->storedAs})";
         }
-    }
 
-    /**
-     * Get the SQL for an unsigned column modifier.
-     *
-     * @return string|null
-     */
-    protected function modifyUnsigned(Blueprint $blueprint, Fluent $column)
-    {
-        // if ($column->unsigned) {
-        //     return ' unsigned';
-        // }
-        return '';
-    }
-
-    /**
-     * Get the SQL for a character set column modifier.
-     *
-     * @return string|null
-     */
-    protected function modifyCharset(Blueprint $blueprint, Fluent $column)
-    {
-        if (! is_null($column->charset)) {
-            return ' character set '.$column->charset;
-        }
+        return null;
     }
 
     /**
@@ -974,6 +946,50 @@ class Schema extends BaseGrammar
         if (! is_null($column->collation)) {
             return " collate '{$column->collation}'";
         }
+
+        return null;
+    }
+
+    /**
+     * Get the SQL for a "comment" column modifier.
+     *
+     * @return string|null
+     */
+    protected function modifyComment(Blueprint $blueprint, Fluent $column)
+    {
+        if (! is_null($column->comment)) {
+            return ' comment '.$this->quoteStringLiteral($column->comment);
+        }
+
+        return null;
+    }
+
+    /**
+     * Get the SQL for a default column modifier.
+     *
+     * @return string|null
+     */
+    protected function modifyDefault(Blueprint $blueprint, Fluent $column)
+    {
+        if (! is_null($column->default)) {
+            return ' default '.$this->getDefaultValue($column->default, $column->type);
+        }
+
+        return null;
+    }
+
+    /**
+     * Get the SQL for an auto-increment column modifier.
+     *
+     * @return string|null
+     */
+    protected function modifyIncrement(Blueprint $blueprint, Fluent $column)
+    {
+        if (in_array($column->type, $this->serials, true) && $column->autoIncrement) {
+            return ' autoincrement';
+        }
+
+        return null;
     }
 
     /**
@@ -987,81 +1003,28 @@ class Schema extends BaseGrammar
             return $column->nullable ? ' null' : ' not null';
         }
 
-        if (false === $column->nullable) {
+        if ($column->nullable === false) {
             return ' not null';
         }
+
+        return null;
     }
 
     /**
-     * Get the SQL for a default column modifier.
+     * Get the SQL for the inline primary key of an auto-increment column.
+     *
+     * Inline constraints must be the last clause of a Snowflake column
+     * definition, after NOT NULL.
      *
      * @return string|null
      */
-    protected function modifyDefault(Blueprint $blueprint, Fluent $column)
-    {
-        if (! is_null($column->default)) {
-            return ' default '.$this->getDefaultValue($column->default, $column->type);
-        }
-    }
-
-    /**
-     * Get the SQL for an auto-increment column modifier.
-     *
-     * @return string|null
-     */
-    protected function modifyIncrement(Blueprint $blueprint, Fluent $column)
+    protected function modifyPrimaryKey(Blueprint $blueprint, Fluent $column)
     {
         if (in_array($column->type, $this->serials, true) && $column->autoIncrement) {
-            return ' autoincrement primary key';
+            return ' primary key';
         }
-    }
 
-    /**
-     * Get the SQL for a "first" column modifier.
-     *
-     * @return string|null
-     */
-    protected function modifyFirst(Blueprint $blueprint, Fluent $column)
-    {
-        if (! is_null($column->first)) {
-            return ' first';
-        }
-    }
-
-    /**
-     * Get the SQL for an "after" column modifier.
-     *
-     * @return string|null
-     */
-    protected function modifyAfter(Blueprint $blueprint, Fluent $column)
-    {
-        if (! is_null($column->after)) {
-            return ' after '.$this->wrap($column->after);
-        }
-    }
-
-    /**
-     * Get the SQL for a "comment" column modifier.
-     *
-     * @return string|null
-     */
-    protected function modifyComment(Blueprint $blueprint, Fluent $column)
-    {
-        if (! is_null($column->comment)) {
-            return " comment '".addslashes($column->comment)."'";
-        }
-    }
-
-    /**
-     * Get the SQL for a SRID column modifier.
-     *
-     * @return string|null
-     */
-    protected function modifySrid(Blueprint $blueprint, Fluent $column)
-    {
-        if (! is_null($column->srid) && is_int($column->srid) && $column->srid > 0) {
-            return ' srid '.$column->srid;
-        }
+        return null;
     }
 
     /**
@@ -1071,33 +1034,15 @@ class Schema extends BaseGrammar
      */
     protected function getColumns(Blueprint $blueprint)
     {
-        return $this->handleNullables(
-            $this->getColumnModifiers($blueprint->getAddedColumns(), $blueprint),
-            false // mode Change
-        );
-    }
-
-    /**
-     * Compile the blueprint's column definitions for changed columns.
-     *
-     * @return array
-     */
-    protected function getChangedColumns(Blueprint $blueprint)
-    {
-        // by default all columns are nullable only keep not null on change
-        return $this->handleNullables(
-            $this->getColumnModifiers($blueprint->getChangedColumns(), $blueprint),
-            true // mode Change
-        );
+        return $this->handleNullables(parent::getColumns($blueprint), false);
     }
 
     /**
      * Handle NULL or NOT NULL statements from within the queries.
-     * Make seperate query's and push them into the columns array.
+     * Make separate queries and push them into the columns array.
      */
     protected function handleNullables(array $columns, bool $isChanging = false): array
     {
-        // get current state of the table
         foreach ($columns as $i => $column) {
             // on adding columns to the table
             if (! $isChanging) {
@@ -1106,7 +1051,7 @@ class Schema extends BaseGrammar
                 }
             }
             // when changing the table
-            elseif ($isChanging) {
+            else {
                 // handle nullables
                 if (str_contains($column, ' not null')) {
                     // query: "column" set not null
@@ -1120,6 +1065,10 @@ class Schema extends BaseGrammar
                 } elseif (str_contains($column, ' null')) {
                     // query: "column" drop not null
                     preg_match('/(\".+\"\s)/', $column, $match);
+                    if (count($match) === 0) {
+                        $match = explode(' ', $column);
+                    }
+
                     $columns[] = trim($match[0]).' drop not null';
                     $column = str_replace(' null', '', $column);
                 }
@@ -1138,31 +1087,9 @@ class Schema extends BaseGrammar
     }
 
     /**
-     * Generate columns based on given Blueprint.
-     *
-     * @return array
-     */
-    protected function getColumnModifiers(array $columns, Blueprint $blueprint)
-    {
-        $parsedColumns = [];
-
-        foreach ($columns as $column) {
-            // Each of the column types have their own compiler functions which are tasked
-            // with turning the column definition into its SQL format for this platform
-            // used by the connection. The column's modifiers are compiled and added.
-            $sql = str_replace("'", '"', $this->wrapColumn($column)).' '.$this->getType($column);
-
-            $parsedColumns[] = $this->addModifiers($sql, $blueprint, $column);
-        }
-
-        return $parsedColumns;
-    }
-
-    /**
      * Format a value so that it can be used in "default" clauses.
      *
-     * @param mixed $value
-     *
+     * @param  mixed  $value
      * @return string
      */
     protected function getDefaultValue($value, $type = null)
@@ -1171,14 +1098,22 @@ class Schema extends BaseGrammar
             return $this->getValue($value);
         }
 
-        if ('boolean' === $type) {
+        if ($type === 'boolean' || is_bool($value)) {
             return filter_var($value, FILTER_VALIDATE_BOOLEAN) ? 'TRUE' : 'FALSE';
-        } elseif (is_float($value)) {
-            return (float) $value;
-        } elseif (is_numeric($value)) {
-            return (int) $value;
         }
 
-        return "'".(string) $value."'";
+        if (is_int($value) || is_float($value) || is_numeric($value)) {
+            return (string) $value;
+        }
+
+        return $this->quoteStringLiteral((string) $value);
+    }
+
+    /**
+     * Quote a string literal for safe SQL embedding.
+     */
+    protected function quoteStringLiteral(string $value): string
+    {
+        return "'".str_replace(['\\', "'"], ['\\\\', "''"], $value)."'";
     }
 }
