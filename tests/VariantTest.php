@@ -33,17 +33,17 @@ it('is idempotent when wrapping an existing variant', function () {
 
 // ------------------------------------------------------------- compiled SQL
 
-it('wraps variant columns in PARSE_JSON on insert', function () {
+it('parses variant columns through a SELECT projection on insert', function () {
     $connection = variantConnection();
 
     $sql = $connection->getQueryGrammar()->compileInsert($connection->query()->from('countries'), [
         ['code' => 'DE', 'name' => Snowflake::variant(['en' => 'Germany'])],
     ]);
 
-    expect($sql)->toBe('insert into COUNTRIES (CODE, NAME) values (?, PARSE_JSON(?))');
+    expect($sql)->toBe('insert into COUNTRIES (CODE, NAME) select column1, parse_json(column2) from values (?, ?)');
 });
 
-it('wraps variant columns in PARSE_JSON for every row of a bulk insert', function () {
+it('parses variant columns through a SELECT projection for every row of a bulk insert', function () {
     $connection = variantConnection();
 
     $sql = $connection->getQueryGrammar()->compileInsert($connection->query()->from('countries'), [
@@ -51,10 +51,10 @@ it('wraps variant columns in PARSE_JSON for every row of a bulk insert', functio
         ['code' => 'FR', 'name' => Snowflake::variant(['en' => 'France'])],
     ]);
 
-    expect($sql)->toBe('insert into COUNTRIES (CODE, NAME) values (?, PARSE_JSON(?)), (?, PARSE_JSON(?))');
+    expect($sql)->toBe('insert into COUNTRIES (CODE, NAME) select column1, parse_json(column2) from values (?, ?), (?, ?)');
 });
 
-it('leaves non-variant columns as plain placeholders', function () {
+it('leaves a variant-free insert as a standard VALUES statement', function () {
     $connection = variantConnection();
 
     $sql = $connection->getQueryGrammar()->compileInsert($connection->query()->from('countries'), [
@@ -86,7 +86,7 @@ it('wraps variant columns in PARSE_JSON on upsert', function () {
     );
 
     expect($sql)->toBe(
-        'merge into COUNTRIES using (select column1 as CODE, column2 as NAME from values (?, PARSE_JSON(?))) as laravel_source '
+        'merge into COUNTRIES using (select column1 as CODE, parse_json(column2) as NAME from values (?, ?)) as laravel_source '
         .'on COUNTRIES.CODE = laravel_source.CODE '
         .'when matched then update set NAME = laravel_source.NAME '
         .'when not matched then insert (CODE, NAME) values (laravel_source.CODE, laravel_source.NAME)'
