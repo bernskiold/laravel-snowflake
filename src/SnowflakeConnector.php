@@ -105,9 +105,30 @@ class SnowflakeConnector extends OdbcConnector implements OdbcDriver
             $config[$pwdKey] = $passphrase;
         }
 
-        $allowedKeys = ['driver', 'account', 'server', 'database', 'warehouse', 'schema', 'port', $pwdKey, 'odbc_driver', 'authenticator', $fileKey, 'odbcdriver', 'username', 'options'];
+        // Everything else the connection was configured with goes on to the DSN.
+        // This used to be an allow-list, which silently dropped every option it
+        // had not been taught about — `logintimeout`, `retrytimeout`,
+        // `maxhttpretries`, `role` — so a connection tuned to fail fast quietly
+        // ran on the driver's own defaults instead, and only under key-pair
+        // auth. What must not reach the DSN is the key material, which the
+        // driver takes by path under its own key, and Laravel's connection
+        // plumbing, which means nothing to Snowflake.
+        $excludedKeys = [
+            'private_key',
+            'private_key_path',
+            'private_key_passphrase',
+            'priv_key_pwd',
+            'password',
+            'name',
+            'prefix',
+            'prefix_indexes',
+            'url',
+            'read',
+            'write',
+            'sticky',
+        ];
 
-        $config = array_intersect_key($config, array_flip($allowedKeys));
+        $config = array_diff_key($config, array_flip($excludedKeys));
 
         return [$config, $temporaryKeyFile];
     }

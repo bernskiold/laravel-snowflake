@@ -95,3 +95,47 @@ it('strips configuration keys that do not belong in the DSN', function () {
 
     unlink($keyFile);
 });
+
+// An allow-list here used to drop every option it had not been taught about,
+// so a connection configured to give up after 30 seconds silently waited on the
+// driver's 300-second default — but only when it authenticated by key pair.
+it('keeps connection tuning options that belong in the DSN', function () {
+    $keyFile = tempnam(sys_get_temp_dir(), 'sf_test_key_');
+    file_put_contents($keyFile, 'PEM CONTENT');
+
+    [$config] = configureKeyPairAuth([
+        'driver' => 'snowflake_native',
+        'authenticator' => 'key_pair',
+        'private_key_path' => $keyFile,
+        'account' => 'test-account',
+        'warehouse' => 'BAV_READ_WH',
+        'role' => 'BAV_APP',
+        'logintimeout' => 30,
+        'retrytimeout' => 30,
+        'maxhttpretries' => 3,
+    ], true);
+
+    expect($config)->toMatchArray([
+        'logintimeout' => 30,
+        'retrytimeout' => 30,
+        'maxhttpretries' => 3,
+        'role' => 'BAV_APP',
+        'warehouse' => 'BAV_READ_WH',
+    ]);
+
+    unlink($keyFile);
+});
+
+it('never puts the private key itself in the DSN', function () {
+    [$config, $temporaryKeyFile] = configureKeyPairAuth([
+        'driver' => 'snowflake_native',
+        'authenticator' => 'key_pair',
+        'private_key' => '-----BEGIN PRIVATE KEY-----',
+        'private_key_passphrase' => 'passphrase',
+    ], true);
+
+    expect($config)->not->toHaveKeys(['private_key', 'private_key_path', 'private_key_passphrase'])
+        ->and($config['priv_key_file'])->toBe($temporaryKeyFile);
+
+    unlink($temporaryKeyFile);
+});

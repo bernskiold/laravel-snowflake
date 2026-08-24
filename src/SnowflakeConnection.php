@@ -4,14 +4,18 @@ namespace Bernskiold\LaravelSnowflake;
 
 use Bernskiold\LaravelSnowflake\Odbc\OdbcConnection;
 use Bernskiold\LaravelSnowflake\Values\Variant;
+use Closure;
 use DateTimeInterface;
 use Illuminate\Database\Query\Processors\Processor;
+use Illuminate\Database\QueryException;
 use PDO;
+use PDOException;
 use PDOStatement;
 
 use function is_bool;
 use function is_int;
 use function is_null;
+use function str_starts_with;
 
 class SnowflakeConnection extends OdbcConnection
 {
@@ -45,6 +49,52 @@ class SnowflakeConnection extends OdbcConnection
         if ($this->tempKeyFile && file_exists($this->tempKeyFile)) {
             unlink($this->tempKeyFile);
         }
+    }
+
+    /**
+     * Drop a connection the driver has told us is broken, so the next query
+     * opens a fresh one.
+     *
+     * Laravel heals a dead connection by matching the driver's error message
+     * against a fixed list of strings, none of which Snowflake produces — it
+     * reports a broken session as "Request returned as being unsuccessful",
+     * its catch-all for a response it could not parse. So a session that dies
+     * under a long-lived process (a queue worker, above all) is never
+     * re-established: the dead PDO stays cached on this connection and every
+     * query after it fails instantly, until someone restarts the process.
+     *
+     * The query itself is still failed rather than replayed. Retrying it here
+     * would be silent statement replay, and a write whose response was lost
+     * after it had already run would be applied twice. Dropping the connection
+     * and letting the caller retry gets the same recovery without that risk.
+     */
+    protected function handleQueryException(QueryException $e, $query, $bindings, Closure $callback)
+    {
+        if ($this->causedByBrokenConnection($e)) {
+            $this->disconnect();
+        }
+
+        return parent::handleQueryException($e, $query, $bindings, $callback);
+    }
+
+    /**
+     * Whether the driver is reporting a connection-level failure rather than
+     * something wrong with the statement.
+     *
+     * Read from the SQLSTATE class rather than the message: `08` is the
+     * standard "connection exception" class, which is what the Snowflake
+     * driver reports for a session it can no longer use, and it does not
+     * depend on error wording surviving a driver upgrade.
+     */
+    protected function causedByBrokenConnection(QueryException $e): bool
+    {
+        $previous = $e->getPrevious();
+
+        $sqlState = $previous instanceof PDOException && isset($previous->errorInfo[0])
+            ? (string) $previous->errorInfo[0]
+            : (string) $e->getCode();
+
+        return str_starts_with($sqlState, '08');
     }
 
     /**
