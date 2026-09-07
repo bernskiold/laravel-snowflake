@@ -140,3 +140,45 @@ it('decodes a variant on the way out', function () {
         ->and($cast->get($model, 'name', null, []))->toBeNull()
         ->and($cast->get($model, 'name', Snowflake::variant(['en' => 'Germany']), []))->toBe(['en' => 'Germany']);
 });
+
+it('wraps variant columns in PARSE_JSON on a multi-row upsert', function () {
+    // The sync engine merges up to a chunk at a time, so the multi-row source
+    // is the shape that actually ships; single-row MERGEs are the exception.
+    $connection = variantConnection();
+
+    $sql = $connection->getQueryGrammar()->compileUpsert(
+        $connection->query()->from('countries'),
+        [
+            ['code' => 'DE', 'name' => Snowflake::variant(['en' => 'Germany'])],
+            ['code' => 'FR', 'name' => Snowflake::variant(['en' => 'France'])],
+        ],
+        ['code'],
+        ['name']
+    );
+
+    expect($sql)->toBe(
+        'merge into COUNTRIES using (select column1 as CODE, parse_json(column2) as NAME '
+        .'from values (?, ?), (?, ?)) as laravel_source '
+        .'on COUNTRIES.CODE = laravel_source.CODE '
+        .'when matched then update set NAME = laravel_source.NAME '
+        .'when not matched then insert (CODE, NAME) values (laravel_source.CODE, laravel_source.NAME)'
+    );
+});
+
+it('parses a variant column even when only a later row carries one', function () {
+    // columnContainsVariant scans every row, not just the first — a null in the
+    // first row must not decide that the column is plain text for the batch.
+    $connection = variantConnection();
+
+    $sql = $connection->getQueryGrammar()->compileUpsert(
+        $connection->query()->from('countries'),
+        [
+            ['code' => 'DE', 'name' => null],
+            ['code' => 'FR', 'name' => Snowflake::variant(['en' => 'France'])],
+        ],
+        ['code'],
+        ['name']
+    );
+
+    expect($sql)->toContain('parse_json(column2) as NAME');
+});
