@@ -22,6 +22,25 @@ return [
 
     /*
     |--------------------------------------------------------------------------
+    | Lowercase Result Keys
+    |--------------------------------------------------------------------------
+    |
+    | Snowflake returns column names as it stores them, so with the default
+    | uppercase convention a row arrives as ID, NAME, CREATED_AT. Code that
+    | addresses columns in lowercase then reads nothing — Eloquent in
+    | particular will hydrate a model whose every attribute is null rather
+    | than fail. Enable this to fold the keys of returned rows, leaving the
+    | identifiers in Snowflake itself uppercase.
+    |
+    | Can be overridden per connection via the "lowercase_result_keys" key in
+    | the connection's "options" array.
+    |
+    */
+
+    'lowercase_result_keys' => env('SNOWFLAKE_LOWERCASE_RESULT_KEYS', false),
+
+    /*
+    |--------------------------------------------------------------------------
     | Case-Insensitive LIKE
     |--------------------------------------------------------------------------
     |

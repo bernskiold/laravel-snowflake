@@ -148,6 +148,7 @@ configuration is cached with `php artisan config:cache`.
 | Option | Default | Description |
 | --- | --- | --- |
 | `case_sensitive` | `false` | Quote identifiers and keep their casing instead of uppercasing them |
+| `lowercase_result_keys` | `false` | Lower-case the column names returned in result rows |
 | `use_ilike` | `true` | Compile `LIKE` to the case-insensitive `ILIKE` |
 | `force_quoted_identifiers` | `true` | Run `ALTER SESSION SET QUOTED_IDENTIFIERS_IGNORE_CASE = false` on connect |
 
@@ -168,6 +169,35 @@ single connection:
     ],
 ],
 ```
+
+### Result key casing
+
+Snowflake returns column names the way it stores them, so with the default
+(uppercase) convention a row arrives as `ID`, `NAME`, `CREATED_AT`. Code that
+addresses columns in lowercase then reads nothing — Eloquent above all, whose
+attributes, casts, primary key and relations are all named in the schema's own
+casing, and which will hydrate a model whose every attribute is `null` rather
+than fail.
+
+`lowercase_result_keys` folds the keys of every returned row, leaving the
+database itself alone: identifiers stay uppercase in Snowflake, where that is
+the convention and where anything browsing the schema expects them. Only what
+PHP sees changes. This is usually what you want when putting Eloquent models on
+a Snowflake connection, and is the alternative to `case_sensitive`, which
+solves the same problem by storing lowercase quoted identifiers instead.
+
+```php
+'snowflake' => [
+    // ...
+    'options' => [
+        'lowercase_result_keys' => true,
+    ],
+],
+```
+
+It applies to `select()`, `selectOne()`, `cursor()` and `selectResultSets()`,
+so streamed reads (`lazy()`, `chunk()`) fold too. It is off by default because
+enabling it changes what every existing caller reads.
 
 ### Case-insensitive LIKE
 

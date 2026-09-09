@@ -11,11 +11,17 @@ use Illuminate\Database\QueryException;
 use PDO;
 use PDOException;
 use PDOStatement;
+use stdClass;
 
+use function array_change_key_case;
+use function array_map;
+use function get_object_vars;
+use function is_array;
 use function is_bool;
 use function is_int;
 use function is_null;
 use function str_starts_with;
+use function strtolower;
 
 class SnowflakeConnection extends OdbcConnection
 {
@@ -196,5 +202,115 @@ class SnowflakeConnection extends OdbcConnection
         }
 
         return new SnowflakeProcessor;
+    }
+
+    /**
+     * Whether result keys should be lower-cased on the way out.
+     *
+     * Snowflake folds unquoted identifiers to upper case and returns them
+     * that way, so a row comes back as `ID`, `NAME`, `CREATED_AT`. Code that
+     * addresses columns in lower case — Eloquent above all, whose attributes,
+     * casts, primary key and relations are all named in the schema's own
+     * casing — then reads `null` for every one of them, silently.
+     *
+     * Enabling this leaves the database alone: identifiers stay upper case in
+     * Snowflake, where that is the convention and where anything browsing the
+     * schema expects to find them. Only the keys PHP sees are folded.
+     *
+     * Off by default, because it would otherwise change what every existing
+     * caller reads. The per-connection option takes precedence over the
+     * package config, as the other options do.
+     */
+    protected function lowercasesResultKeys(): bool
+    {
+        $configured = $this->getConfig('options.lowercase_result_keys');
+
+        return (bool) ($configured ?? config('snowflake.lowercase_result_keys', false));
+    }
+
+    /**
+     * {@inheritDoc}
+     */
+    public function select($query, $bindings = [], $useReadPdo = true, array $fetchUsing = [])
+    {
+        return $this->lowerCaseKeysOf(parent::select($query, $bindings, $useReadPdo, $fetchUsing));
+    }
+
+    /**
+     * {@inheritDoc}
+     */
+    public function selectResultSets($query, $bindings = [], $useReadPdo = true, array $fetchUsing = [])
+    {
+        $sets = parent::selectResultSets($query, $bindings, $useReadPdo, $fetchUsing);
+
+        if (! $this->lowercasesResultKeys()) {
+            return $sets;
+        }
+
+        return array_map($this->lowerCaseKeysOf(...), $sets);
+    }
+
+    /**
+     * {@inheritDoc}
+     *
+     * Kept separate from the generator below so that a connection which is not
+     * folding keys hands back the parent's cursor untouched — a method
+     * containing `yield` is a generator whether or not the branch is taken.
+     */
+    public function cursor($query, $bindings = [], $useReadPdo = true, array $fetchUsing = [])
+    {
+        if (! $this->lowercasesResultKeys()) {
+            return parent::cursor($query, $bindings, $useReadPdo, $fetchUsing);
+        }
+
+        return $this->lowerCasedCursor($query, $bindings, $useReadPdo, $fetchUsing);
+    }
+
+    /**
+     * @return \Generator
+     */
+    protected function lowerCasedCursor($query, $bindings, $useReadPdo, array $fetchUsing = [])
+    {
+        foreach (parent::cursor($query, $bindings, $useReadPdo, $fetchUsing) as $record) {
+            yield $this->lowerCaseKeysOfRecord($record);
+        }
+    }
+
+    /**
+     * @param  array  $records
+     * @return array
+     */
+    protected function lowerCaseKeysOf($records)
+    {
+        if (! $this->lowercasesResultKeys()) {
+            return $records;
+        }
+
+        return array_map($this->lowerCaseKeysOfRecord(...), $records);
+    }
+
+    /**
+     * Fold one row's keys, whichever shape the fetch mode produced.
+     *
+     * @param  mixed  $record
+     * @return mixed
+     */
+    protected function lowerCaseKeysOfRecord($record)
+    {
+        if ($record instanceof stdClass) {
+            $folded = new stdClass;
+
+            foreach (get_object_vars($record) as $key => $value) {
+                $folded->{strtolower((string) $key)} = $value;
+            }
+
+            return $folded;
+        }
+
+        if (is_array($record)) {
+            return array_change_key_case($record, CASE_LOWER);
+        }
+
+        return $record;
     }
 }

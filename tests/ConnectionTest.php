@@ -93,3 +93,77 @@ it('keeps the connection when the statement itself was at fault', function () {
     // would mean a fresh login for every typo.
     expect($connection->getPdo())->not->toBeNull();
 });
+
+/**
+ * Snowflake folds unquoted identifiers to upper case and returns them that
+ * way. SQLite preserves whatever casing a quoted column was created with, so
+ * an upper-cased table here reproduces the shape a real Snowflake result has.
+ */
+function connectionReturningUpperCaseColumns(array $config = [])
+{
+    $connection = test()->makeConnection($config);
+
+    $pdo = $connection->getPdo();
+    $pdo->exec('create table rows_table ("ID" integer, "BRAND_NAME" text)');
+    $pdo->exec("insert into rows_table values (1, 'Lotus'), (2, 'Elise')");
+
+    return $connection;
+}
+
+it('leaves result keys as the driver returned them by default', function () {
+    $rows = connectionReturningUpperCaseColumns()->select('select * from rows_table order by "ID"');
+
+    expect(get_object_vars($rows[0]))->toBe(['ID' => 1, 'BRAND_NAME' => 'Lotus']);
+});
+
+it('lower-cases result keys when the connection asks for it', function () {
+    $rows = connectionReturningUpperCaseColumns(['options' => ['lowercase_result_keys' => true]])
+        ->select('select * from rows_table order by "ID"');
+
+    expect(get_object_vars($rows[0]))->toBe(['id' => 1, 'brand_name' => 'Lotus'])
+        ->and(get_object_vars($rows[1]))->toBe(['id' => 2, 'brand_name' => 'Elise']);
+});
+
+it('lower-cases the keys of a single result row', function () {
+    $row = connectionReturningUpperCaseColumns(['options' => ['lowercase_result_keys' => true]])
+        ->selectOne('select * from rows_table order by "ID"');
+
+    expect(get_object_vars($row))->toBe(['id' => 1, 'brand_name' => 'Lotus']);
+});
+
+it('lower-cases result keys when streaming a cursor', function () {
+    // The export paths read through lazy()/cursor() rather than get(), so the
+    // folding has to survive the generator as well.
+    $rows = iterator_to_array(
+        connectionReturningUpperCaseColumns(['options' => ['lowercase_result_keys' => true]])
+            ->cursor('select * from rows_table order by "ID"')
+    );
+
+    expect(get_object_vars($rows[0]))->toBe(['id' => 1, 'brand_name' => 'Lotus'])
+        ->and($rows)->toHaveCount(2);
+});
+
+it('leaves a cursor alone when the connection is not folding keys', function () {
+    $rows = iterator_to_array(
+        connectionReturningUpperCaseColumns()->cursor('select * from rows_table order by "ID"')
+    );
+
+    expect(get_object_vars($rows[0]))->toBe(['ID' => 1, 'BRAND_NAME' => 'Lotus']);
+});
+
+it('falls back to the package config when the connection does not set the option', function () {
+    config()->set('snowflake.lowercase_result_keys', true);
+
+    $rows = connectionReturningUpperCaseColumns()->select('select * from rows_table order by "ID"');
+
+    expect(get_object_vars($rows[0]))->toBe(['id' => 1, 'brand_name' => 'Lotus']);
+});
+
+it('lets the connection option override the package config', function () {
+    config()->set('snowflake.lowercase_result_keys', true);
+
+    $rows = connectionReturningUpperCaseColumns(['options' => ['lowercase_result_keys' => false]])
+        ->select('select * from rows_table order by "ID"');
+
+    expect(get_object_vars($rows[0]))->toBe(['ID' => 1, 'BRAND_NAME' => 'Lotus']);
+});
