@@ -77,12 +77,33 @@ it('compiles raw expression defaults', function () {
     expect($statements)->toBe(['alter table USERS add column TOKEN varchar(255) default uuid_string() not null']);
 });
 
-it('compiles column comments', function () {
+it('compiles column comments last, after every other clause', function () {
     $statements = blueprint('users', function (Blueprint $table) {
         $table->string('name')->comment('Full name');
     })->toSql();
 
-    expect($statements)->toBe(["alter table USERS add column NAME varchar(255) comment 'Full name' not null"]);
+    expect($statements)->toBe(["alter table USERS add column NAME varchar(255) not null comment 'Full name'"]);
+});
+
+it('compiles a commented auto-incrementing primary key', function () {
+    // Snowflake ends a column definition with COMMENT, so a comment emitted
+    // before the constraints makes each of them a syntax error in turn:
+    // "unexpected 'autoincrement'", then 'not', then 'key'. Only a column
+    // carrying both a comment and a constraint shows it.
+    $statements = blueprint('users', function (Blueprint $table) {
+        $table->create();
+        $table->id()->comment('Surrogate key');
+        $table->string('email')->comment('Contact address');
+        $table->string('nickname')->default('anon')->comment('Display name');
+    })->toSql();
+
+    expect($statements)->toBe([
+        'create table USERS ('
+            ."ID bigint autoincrement not null primary key comment 'Surrogate key', "
+            ."EMAIL varchar(255) not null comment 'Contact address', "
+            ."NICKNAME varchar(255) default 'anon' not null comment 'Display name'"
+        .')',
+    ]);
 });
 
 it('compiles change column statements', function () {

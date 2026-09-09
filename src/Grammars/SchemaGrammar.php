@@ -31,14 +31,21 @@ class SchemaGrammar extends BaseGrammar
 
     /**
      * The possible column modifiers, in the order Snowflake documents the
-     * column clauses: collate, comment, default/autoincrement, not null,
-     * inline constraint.
+     * column clauses: collate, default/autoincrement, not null, inline
+     * constraint, comment.
+     *
+     * COMMENT is last. Snowflake ends a column definition with it, after the
+     * inline constraint, so emitting it any earlier turns every clause that
+     * follows into a syntax error:
+     *
+     *     ID bigint comment '…' autoincrement not null primary key
+     *                           ^ unexpected 'autoincrement'
      *
      * @var string[]
      */
     protected $modifiers = [
-        'VirtualAs', 'StoredAs', 'Collate', 'Comment',
-        'Default', 'Increment', 'Nullable', 'PrimaryKey',
+        'VirtualAs', 'StoredAs', 'Collate', 'Default',
+        'Increment', 'Nullable', 'PrimaryKey', 'Comment',
     ];
 
     /**
