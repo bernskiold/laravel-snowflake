@@ -88,7 +88,7 @@ Do not start the value with `snowflake:`. The package adds this prefix.
 
 ## Package options
 
-The package has three options. You can set each option at two levels:
+The package has four options. You can set each option at two levels:
 
 - For all connections, in `config/snowflake.php`.
 - For one connection, in the `options` array of the connection. This value
@@ -97,6 +97,7 @@ The package has three options. You can set each option at two levels:
 | Option | Default | Environment variable | Description |
 | --- | --- | --- | --- |
 | `case_sensitive` | `false` | `SNOWFLAKE_COLUMNS_CASE_SENSITIVE` | Puts table and column names in quotes and keeps their case. |
+| `lowercase_result_keys` | `false` | `SNOWFLAKE_LOWERCASE_RESULT_KEYS` | Changes the column names in result rows to lowercase. |
 | `use_ilike` | `true` | `SNOWFLAKE_USE_ILIKE` | Changes `LIKE` to the case-insensitive `ILIKE`. |
 | `force_quoted_identifiers` | `true` | `SNOWFLAKE_FORCE_QUOTED_IDENTIFIERS` | Sets `QUOTED_IDENTIFIERS_IGNORE_CASE = false` for each new session. |
 
@@ -138,6 +139,52 @@ DB::table('orders')->where('customerId', 42)->get();
 > **CAUTION:** Use the same `case_sensitive` value for all migrations and
 > queries on a table. If you change the value, the package cannot find the
 > tables and columns that it made before.
+
+### Case of the column names in results
+
+Snowflake gives column names in results as it keeps them. With the default
+behavior, these names are in uppercase. Thus, a row has the keys `ID`,
+`NAME` and `CREATED_AT`.
+
+Eloquent uses lowercase names for attributes, casts, primary keys and
+relations. Thus, a model gets the value `null` for each attribute. Eloquent
+does not give an error.
+
+```php
+$order = Order::first();
+
+$order->getAttributes(); // ['ID' => 1, 'STATUS' => 'shipped']
+$order->status;          // null
+```
+
+Set `lowercase_result_keys` to `true` to change the keys of each result row
+to lowercase:
+
+```php
+'snowflake' => [
+    'driver' => 'snowflake_native',
+    // ...
+    'options' => [
+        'lowercase_result_keys' => true,
+    ],
+],
+```
+
+This option does not change the database. The names in Snowflake stay in
+uppercase. Only the keys in PHP change.
+
+The option applies to `select()`, `selectOne()`, `cursor()` and
+`selectResultSets()`. Thus, it also applies to `lazy()`, `chunk()` and the
+other methods that use them.
+
+The option is off by default. When you set it, all code that reads results
+from the connection gets lowercase keys. Examine your code before you set
+it on a connection that you use already.
+
+> **NOTE:** The `case_sensitive` option is a different solution for the
+> same problem. It keeps lowercase names in Snowflake, in quotes. We
+> recommend `lowercase_result_keys` when other tools also read the
+> database, because these tools expect uppercase names.
 
 ### Case-insensitive LIKE
 

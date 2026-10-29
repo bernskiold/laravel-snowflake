@@ -96,6 +96,24 @@ If you cannot install the native driver, use the ODBC driver. Refer to
 > **NOTE:** For production, we recommend key-pair authentication. Refer to
 > [Authentication](authentication.md).
 
+## Prepare the connection for Eloquent
+
+If you use Eloquent models on the connection, set the
+`lowercase_result_keys` option:
+
+```php
+'snowflake' => [
+    'driver' => 'snowflake_native',
+    // ...
+    'options' => [
+        'lowercase_result_keys' => true,
+    ],
+],
+```
+
+Without this option, each attribute of a model is `null`. Refer to
+[Configuration](configuration.md#case-of-the-column-names-in-results).
+
 ## Test the connection
 
 1. Run this command:
