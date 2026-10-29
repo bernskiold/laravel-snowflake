@@ -37,7 +37,7 @@ class OdbcConnector extends Connector implements ConnectorInterface, OdbcDriver
 
         // FULL DSN ONLY
         if ($dsn = Arr::get($config, 'dsn')) {
-            $dsn = ! Str::contains($this->dsnPrefix.':', $dsn) ? $this->dsnPrefix.':'.$dsn : $dsn;
+            $dsn = $this->prefixDsn($dsn);
         }
         // dynamicly build in some way..
         else {
@@ -45,6 +45,14 @@ class OdbcConnector extends Connector implements ConnectorInterface, OdbcDriver
         }
 
         return $this->createConnection($dsn, $config, $options);
+    }
+
+    /**
+     * Add the DSN prefix to a full DSN, unless it already starts with it.
+     */
+    protected function prefixDsn(string $dsn): string
+    {
+        return Str::startsWith($dsn, $this->dsnPrefix.':') ? $dsn : $this->dsnPrefix.':'.$dsn;
     }
 
     /**

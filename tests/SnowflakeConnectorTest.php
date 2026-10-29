@@ -139,3 +139,39 @@ it('never puts the private key itself in the DSN', function () {
 
     unlink($temporaryKeyFile);
 });
+
+// The ODBC driver path used to be read from an "odbcdriver" key under key-pair
+// auth, overwriting the documented "odbc_driver" with null — so every ODBC
+// connection that authenticated by key pair failed before it reached Snowflake.
+it('keeps the odbc driver under key pair authentication', function () {
+    $keyFile = tempnam(sys_get_temp_dir(), 'sf_test_key_');
+    file_put_contents($keyFile, 'PEM CONTENT');
+
+    [$config] = configureKeyPairAuth([
+        'driver' => 'snowflake',
+        'authenticator' => 'key_pair',
+        'private_key_path' => $keyFile,
+        'odbc_driver' => '/opt/snowflake/libSnowflake.so',
+    ]);
+
+    expect($config['odbc_driver'])->toBe('/opt/snowflake/libSnowflake.so');
+
+    unlink($keyFile);
+});
+
+it('still accepts the legacy odbcdriver key under key pair authentication', function () {
+    $keyFile = tempnam(sys_get_temp_dir(), 'sf_test_key_');
+    file_put_contents($keyFile, 'PEM CONTENT');
+
+    [$config] = configureKeyPairAuth([
+        'driver' => 'snowflake',
+        'authenticator' => 'key_pair',
+        'private_key_path' => $keyFile,
+        'odbcdriver' => '/opt/snowflake/libSnowflake.so',
+    ]);
+
+    expect($config['odbc_driver'])->toBe('/opt/snowflake/libSnowflake.so')
+        ->and($config)->not->toHaveKey('odbcdriver');
+
+    unlink($keyFile);
+});
