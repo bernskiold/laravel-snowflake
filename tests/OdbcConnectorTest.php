@@ -46,3 +46,21 @@ it('requires the odbc_driver option when building dynamically', function () {
         'server' => 'account.snowflakecomputing.com',
     ]);
 })->throws(Exception::class, 'DB_ODBC_DRIVER');
+
+function prefixDsn(string $dsn): string
+{
+    $connector = new OdbcConnector;
+    $method = new ReflectionMethod($connector, 'prefixDsn');
+
+    return $method->invoke($connector, $dsn);
+}
+
+it('prefixes a full DSN', function () {
+    expect(prefixDsn('Driver={Snowflake};Server=account.snowflakecomputing.com'))
+        ->toBe('odbc:Driver={Snowflake};Server=account.snowflakecomputing.com');
+});
+
+it('does not prefix a full DSN twice', function () {
+    expect(prefixDsn('odbc:Driver={Snowflake};Server=account.snowflakecomputing.com'))
+        ->toBe('odbc:Driver={Snowflake};Server=account.snowflakecomputing.com');
+});

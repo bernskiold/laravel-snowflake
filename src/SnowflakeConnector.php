@@ -79,7 +79,8 @@ class SnowflakeConnector extends OdbcConnector implements OdbcDriver
     protected function configureKeyPairAuth(array $config, bool $usingSnowflakeDriver): array
     {
         $config['authenticator'] = 'SNOWFLAKE_JWT';
-        $config['odbc_driver'] = Arr::get($config, 'odbcdriver');
+        // "odbcdriver" is the legacy spelling of the documented "odbc_driver".
+        $config['odbc_driver'] = Arr::get($config, 'odbc_driver', Arr::get($config, 'odbcdriver'));
 
         $keyFile = trim((string) Arr::get($config, 'private_key_path', ''));
         $privateKey = trim((string) Arr::get($config, 'private_key', ''));
@@ -118,6 +119,7 @@ class SnowflakeConnector extends OdbcConnector implements OdbcDriver
             'private_key_path',
             'private_key_passphrase',
             'priv_key_pwd',
+            'odbcdriver',
             'password',
             'name',
             'prefix',
