@@ -12,3 +12,11 @@ parameters:
         -
             message: '#Return type \(null\) of method Bernskiold\\LaravelSnowflake\\Grammars\\SchemaGrammar::compile(Fulltext|DropFullText)\(\)#'
             path: src/Grammars/SchemaGrammar.php
+        # Laravel 13 added a fourth $fetchUsing parameter to select(), cursor()
+        # and selectResultSets(), and the connection forwards it. On Laravel 12
+        # the extra argument is ignored at runtime, but PHPStan flags it when it
+        # analyses against the locked Laravel 12. Unmatched on Laravel 13.
+        -
+            message: '#Method Illuminate\\Database\\Connection::(select|selectResultSets|cursor)\(\) invoked with 4 parameters, 1-3 required\.#'
+            path: src/SnowflakeConnection.php
+            reportUnmatched: false
