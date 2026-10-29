@@ -24,7 +24,9 @@ $orders = DB::connection('snowflake')
     ->get();
 ```
 
-Eloquent models work when you set the connection on the model:
+Eloquent models work when you set the connection on the model and set the
+`lowercase_result_keys` option on the connection. Refer to
+[Configuration](configuration.md#case-of-the-column-names-in-results).
 
 ```php
 class Order extends Model
