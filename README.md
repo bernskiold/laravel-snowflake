@@ -1,6 +1,6 @@
 # Laravel Snowflake
 
-[![Tests](https://github.com/bernskiold/laravel-pdo-odbc/actions/workflows/tests.yml/badge.svg)](https://github.com/bernskiold/laravel-pdo-odbc/actions/workflows/tests.yml)
+[![Tests](https://github.com/bernskiold/laravel-snowflake/actions/workflows/tests.yml/badge.svg)](https://github.com/bernskiold/laravel-snowflake/actions/workflows/tests.yml)
 
 A Snowflake database driver for Laravel, with full support for the query
 builder, Eloquent and schema migrations. It connects to Snowflake either
@@ -407,10 +407,18 @@ composer analyse
 
 ## Further documentation
 
-- [Snowflake ODBC notes](docs/snowflake-odbc.md)
-- [Snowflake ODBC troubleshooting](docs/snowflake-odbc-troubleshooting.md)
-- [Custom `getLastInsertId()` behaviour](docs/custom-last-insert-id.md)
-- [Custom processor and grammars](docs/custom-grammars.md)
+The [`docs`](docs/README.md) folder has the full documentation:
+
+- [Getting started](docs/getting-started.md)
+- [Configuration](docs/configuration.md)
+- [Authentication](docs/authentication.md)
+- [Queries and Eloquent](docs/queries.md)
+- [Semi-structured data](docs/semi-structured-data.md)
+- [Migrations and schema](docs/migrations.md)
+- [Limitations](docs/limitations.md)
+- [Operation in production](docs/operations.md)
+- [ODBC connections](docs/odbc.md)
+- [Extending the package](docs/extending.md)
 
 ## Credits & Thanks
 

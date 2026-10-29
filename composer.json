@@ -10,7 +10,7 @@
     "odbc",
     "pdo"
   ],
-  "homepage": "https://github.com/bernskiold/laravel-pdo-odbc",
+  "homepage": "https://github.com/bernskiold/laravel-snowflake",
   "license": "MIT",
   "authors": [
     {
